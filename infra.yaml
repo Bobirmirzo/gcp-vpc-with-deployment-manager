@@ -1,0 +1,33 @@
+# Copyright 2016 Google Inc. All rights reserved.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.ßß
+
+imports:
+- path: infra.jinja
+- path: comp_engine_instance_template.jinja
+
+resources:
+- name: infra-in-gcp
+  type: infra.jinja
+  properties:
+    any_network: 0.0.0.0/0
+    # common
+    region: asia-northeast1
+    zone_a: asia-northeast1-a
+    zone_b: asia-northeast1-b
+    zone_c: asia-northeast1-c
+    # subnet
+    cidrs_private: [ 10.0.0.0/24 ]
+    cidrs_public: [ 10.0.255.0/24 ]
+    # bastion
+    use_static_global_ip_bastion: true
+    initial_packages: vim less

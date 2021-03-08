@@ -1,0 +1,237 @@
+{#
+Copyright 2016 Google Inc. All rights reserved.
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+   http://www.apache.org/licenses/LICENSE-2.0
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+#}
+
+{% set PREFIX = env["deployment"] %}
+{% set CIDRS_SUBNET_PRIVATE = properties["cidrs_private"] %}
+{% set CIDRS_SUBNET_PUBLIC = properties["cidrs_public"] %}
+{% set COMPUTE_URL_BASE = 'https://www.googleapis.com/compute/v1/' %}
+
+{% macro GlobalComputeUrl(project, collection, name) -%}
+{{ COMPUTE_URL_BASE }}projects/{{ project }}/global/{{ collection }}/{{ name }}
+{%- endmacro %}
+
+{% macro ZonalComputeUrl(project, zone, collection, name) -%}
+{{ COMPUTE_URL_BASE }}projects/{{ project }}/zones/{{ zone }}/{{ collection }}/{{ name }}
+{%- endmacro %}
+
+{% macro RegionalComputeUrl(project, region, collection) -%}
+{{ COMPUTE_URL_BASE }}projects/{{ project }}/regions/{{ region }}/{{ collection }}
+{%- endmacro %}
+
+resources:
+{# VPC network #}
+- name: {{ PREFIX }}-vpc
+  type: compute.v1.network
+  properties:
+    autoCreateSubnetworks: false
+    routeingMode: REGIONAL
+
+{# Private subnets #}
+{% for cidr in CIDRS_SUBNET_PRIVATE %}
+- name: {{ PREFIX }}-subnet-private{{ loop.index }}
+  type: compute.v1.subnetwork
+  properties:
+    network: $(ref.{{ PREFIX }}-vpc.selfLink)
+    ipCidrRange: {{ cidr }}
+    region: {{ properties["region"] }}
+    privateIpGoogleAccess: true
+    enableFlowLogs: true
+    logConfig:
+      aggregationInterval: INTERVAL_5_SEC
+      enable: true
+      flowSampling: 0.5
+      metadata: INCLUDE_ALL_METADATA
+{% endfor %}
+
+{# Public subnets #}
+{% for cidr in CIDRS_SUBNET_PUBLIC %}
+- name: {{ PREFIX }}-subnet-public{{ loop.index }}
+  type: compute.v1.subnetwork
+  properties:
+    network: $(ref.{{ PREFIX }}-vpc.selfLink)
+    ipCidrRange: {{ cidr }}
+    region: {{ properties["region"] }}
+    privateIpGoogleAccess: false
+    enableFlowLogs: true
+    logConfig:
+      aggregationInterval: INTERVAL_5_SEC
+      enable: true
+      flowSampling: 0.5
+      metadata: INCLUDE_ALL_METADATA
+{% endfor %}
+
+{# Bastion global address #}
+{% if properties["use_static_global_ip_bastion"]==true %}
+- name: {{ PREFIX }}-bastion-global-address
+  type: compute.v1.addresses
+  properties:
+    networkTier: PREMIUM
+    addressType: EXTERNAL
+    region: {{ properties["region"] }}
+{% endif %}
+
+{# Routes to Internet Gateway #}
+- name: {{ PREFIX }}-routes-to-internet-gateway
+  type: compute.v1.routes
+  properties:
+    network: $(ref.{{ PREFIX }}-vpc.selfLink)
+    tags:
+    - to-internet-gateway
+    destRange: {{ properties["any_network"] }}
+    nextHopGateway: {{ GlobalComputeUrl(env["project"], 'gateways', 'default-internet-gateway') }}
+
+{# Bastion instance #}
+- name: {{ PREFIX }}-bastion
+  type: compute.v1.instance
+  properties:
+    name: {{ PREFIX }}-bastion
+    zone: {{ properties["zone_a"] }}
+    canIpForward: true
+    machineType: {{ ZonalComputeUrl(env["project"], properties["zone_a"], 'machineTypes', 'f1-micro') }}
+    tags:
+      items:
+      - bastion
+      - to-internet-gateway
+    disks:
+    - deviceName: boot
+      type: PERSISTENT
+      boot: true
+      autoDelete: true
+      initializeParams:
+        sourceImage: https://www.googleapis.com/compute/v1/projects/debian-cloud/global/images/family/debian-9
+    networkInterfaces:
+    - network: $(ref.{{ PREFIX }}-vpc.selfLink)
+      subnetwork: $(ref.{{ PREFIX }}-subnet-public1.selfLink)
+      accessConfigs:
+      - name: External NAT
+        type: ONE_TO_ONE_NAT
+        networkTier: PREMIUM
+        natIP: $(ref.{{ PREFIX }}-bastion-global-address.address)
+
+{# Server instance #}
+- name: {{ PREFIX }}-server
+  type: compute.v1.instance
+  properties:
+    name: {{ PREFIX }}-server
+    zone: {{ properties["zone_b"] }}
+    canIpForward: true
+    machineType: {{ ZonalComputeUrl(env["project"], properties["zone_b"], 'machineTypes', 'f1-micro') }}
+    tags:
+      items:
+      - server
+    disks:
+    - deviceName: boot
+      type: PERSISTENT
+      boot: true
+      autoDelete: true
+      initializeParams:
+        sourceImage: https://www.googleapis.com/compute/v1/projects/debian-cloud/global/images/family/debian-9
+    networkInterfaces:
+    - network: $(ref.{{ PREFIX }}-vpc.selfLink)
+      subnetwork: $(ref.{{ PREFIX }}-subnet-private1.selfLink)
+
+{# - name: {{ PREFIX }}-server
+  type: comp_engine_instance_template.jinja
+  properties:
+    name: {{ PREFIX }}-server
+    canIpForward: false
+    deletionProtection: false
+    machineType: {{ ZonalComputeUrl(env["project"], properties["zone_b"], 'machineTypes', 'n1-standard-1') }}
+    use_tags: true
+    tags_items:
+    - server
+    use_service_account: false
+    autoDelete: true
+    diskSizeGb: 10
+    diskType: {{ ZonalComputeUrl(env["project"], properties["zone_b"], 'diskTypes', 'pd-standard') }}
+    sourceImage: {{ GlobalComputeUrl('ubuntu-os-cloud', 'images/family', 'ubuntu-minimal-1804-lts') }}
+    network: $(ref.{{ PREFIX }}-vpc.selfLink)
+    subnetwork: $(ref.{{ PREFIX }}-subnet-private1.selfLink)
+    use_global_ip: false
+    preemptible: false
+    use_metadata: false #}
+
+{# Default firewall rules #}
+- name: {{ PREFIX }}-fw-default
+  type: compute.v1.firewall
+  properties:
+    priority: 1000
+    network: $(ref.{{ PREFIX }}-vpc.selfLink)
+    direction: INGRESS
+    sourceRanges:
+    - 10.0.0.0/16
+    targetRanges:
+    - 10.0.0.0/16
+    allowed:
+    - IPProtocol: tcp
+      ports:
+      - 1-65535
+    - IPProtocol: udp
+      ports:
+      - 1-65535
+    - IPProtocol: icmp
+    logConfig:
+      enable: true
+
+- name: {{ PREFIX }}-outbound-default
+  type: compute.v1.firewall
+  properties:
+    network: $(ref.{{ PREFIX }}-vpc.selfLink)
+    direction: EGRESS
+    priority: 65534
+    destinationRanges:
+    - {{ properties["any_network"] }}
+    denied:
+    - IPProtocol: all
+
+- name: {{ PREFIX }}-outbound-https
+  type: compute.v1.firewall
+  properties:
+    network: $(ref.{{ PREFIX }}-vpc.selfLink)
+    direction: EGRESS
+    priority: 1000
+    destinationRanges:
+    - {{ properties["any_network"] }}
+    allowed:
+    - IPProtocol: tcp
+      ports:
+      - 443
+
+- name: {{ PREFIX }}-outbound-vpc
+  type: compute.v1.firewall
+  properties:
+    network: $(ref.{{ PREFIX }}-vpc.selfLink)
+    direction: EGRESS
+    priority: 1000
+    destinationRanges:
+    - 10.0.0.0/16
+    allowed:
+    - IPProtocol: all
+
+{# Bastion firewall rule #}
+- name: {{ PREFIX }}-fw-bastion
+  type: compute.v1.firewall
+  properties:
+    priority: 1000
+    network: $(ref.{{ PREFIX }}-vpc.selfLink)
+    direction: INGRESS
+    sourceRanges:
+    - 0.0.0.0/0
+    targetTags:
+    - bastion
+    allowed:
+    - IPProtocol: tcp
+      ports:
+      - 22
+    logConfig:
+      enable: {{ properties["firewall_logconfig_enable"] }}
