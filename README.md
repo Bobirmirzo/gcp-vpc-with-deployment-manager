@@ -2,7 +2,7 @@
 
 By using this repository, you can create following simple environment in GCP by using Deployment Manager:
 
-![](Environment.png)
+![](environment.png)
 
 ## Running deployment manager
 

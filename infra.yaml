@@ -13,7 +13,6 @@
 
 imports:
 - path: infra.jinja
-- path: comp_engine_instance_template.jinja
 
 resources:
 - name: infra-in-gcp
